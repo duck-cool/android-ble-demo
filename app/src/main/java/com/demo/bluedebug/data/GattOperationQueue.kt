@@ -17,7 +17,7 @@ class GattOperationQueue(
     companion object{
         val TAG = GattOperationQueue::class.simpleName
         private val WRITE_CHARACTERISTIC_MAX_RETRIES : Int = 5
-        private val WRITE_CHARACTERISTIC_TIME_TO_WAIT : Int = 10
+        private val WRITE_CHARACTERISTIC_TIME_TO_WAIT : Long = 100
     }
 
     private val queue = ArrayDeque<GattOperation>()
@@ -32,8 +32,8 @@ class GattOperationQueue(
         override fun run() {
             val op = queue.firstOrNull() ?: return
             Log.w(TAG, "⏰ 操作超时: type=${op.type}")
-            val removeFirstOrNull = queue.removeFirstOrNull()
-            Log.w(TAG, "⏰ 操作超时: type=${op.type},$removeFirstOrNull")
+            completeAsFailure(op)
+
         }
 
     }
@@ -62,7 +62,7 @@ class GattOperationQueue(
         val op = queue.first()
         val status = handleOperation(op)
         if (!status){
-            onRetryOperation(op)
+            sendWithBusyRetry(op)
         }
 
     }
@@ -70,17 +70,11 @@ class GattOperationQueue(
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun handleOperation(op: GattOperation): Boolean{
         startTimeout(op)
-        var status = false
         when(op.type){
             OperationType.READ -> {
                 val char = op.characteristic
                 if (char == null) completeAsFailure(op)
-                else{
-                    status = gattProvider()?.readCharacteristic(char)?:false
-                    if (!status){
-                        onOperationCompleted(op.type,false, GattResult(false,null),getUuid(op))
-                    }
-                }
+                else return gattProvider()?.readCharacteristic(char)?:false
             }
 
             OperationType.WRITE -> {
@@ -88,10 +82,7 @@ class GattOperationQueue(
                 if (char == null || op.data == null) completeAsFailure(op)
                 else{
                     char.value = op.data
-                    status = gattProvider()?.writeCharacteristic(char) ?: false
-                    if (!status){
-                        onOperationCompleted(op.type,false, GattResult(false,null),getUuid(op))
-                    }
+                    return gattProvider()?.writeCharacteristic(char) ?: false
                 }
             }
 
@@ -100,24 +91,16 @@ class GattOperationQueue(
                 if (descriptor == null || op.data == null) completeAsFailure(op)
                 else{
                     descriptor.value = op.data
-                    status = gattProvider()?.writeDescriptor(descriptor) ?: false
-                    if (!status){
-                        onOperationCompleted(op.type,false, GattResult(false,null),getUuid(op))
-                    }
+                    return gattProvider()?.writeDescriptor(descriptor) ?: false
                 }
             }
 
             OperationType.MTU -> {
-                status = gattProvider()?.requestMtu(op.mtu) ?: false
-                if (!status){
-                    onOperationCompleted(op.type,false, GattResult(false,null),getUuid(op))
-                }
+                return gattProvider()?.requestMtu(op.mtu) ?: false
             }
-            else -> {
-                status = false
-            }
+            else -> {}
         }
-        return status
+        return true
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -144,14 +127,22 @@ class GattOperationQueue(
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun onRetryOperation(op: GattOperation){
+    fun sendWithBusyRetry(op: GattOperation,busyRetry: Int = 0){
         cancelTimeout()
+        if (op != queue.firstOrNull()) return
+        if (busyRetry >= WRITE_CHARACTERISTIC_MAX_RETRIES){
+            completeAsFailure(op)
+            return
+        }
         try {
-            repeat(WRITE_CHARACTERISTIC_MAX_RETRIES) {
-                handleOperation(op)
-            }
+            handler.postDelayed({
+                val status = handleOperation(op)
+                if (!status){
+                    sendWithBusyRetry(op,busyRetry+1)
+                }
+            },WRITE_CHARACTERISTIC_TIME_TO_WAIT)
         }catch (e: RemoteException){
-
+            Log.i(TAG, "sendWithBusyRetry: 丢弃这次任务: ${op.type}")
         }
     }
 
@@ -171,9 +162,11 @@ class GattOperationQueue(
         OperationType.MTU -> null
     }
 
-
-    fun clear(){
+    fun clearQueue(){
         cancelTimeout()
+        while (queue.isNotEmpty()){
+            queue.removeFirst().onResult(GattResult(false,null))
+        }
         queue.clear()
         isExecuting = false
     }
