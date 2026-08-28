@@ -17,6 +17,8 @@ import android.bluetooth.le.ScanSettings
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import android.util.Log
 import android.widget.Button
@@ -32,15 +34,18 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.demo.bluedebug.adpater.BluetoothDeviceAdapter
 import com.demo.bluedebug.data.BluetoothDeviceItem
+import com.demo.bluedebug.data.ConnState
 import com.demo.bluedebug.data.GattOperation
 import com.demo.bluedebug.data.GattOperationQueue
 import com.demo.bluedebug.data.GattResult
 import com.demo.bluedebug.data.OperationType
+import kotlinx.coroutines.Runnable
 import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
     companion object{
         val TAG = MainActivity::class.simpleName
+        val MAX_RETRY_MILLIS: Long = 30000
     }
 
     private lateinit var btnScan: Button
@@ -50,6 +55,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var bluetoothAdapter: BluetoothDeviceAdapter
 
     private var queue: GattOperationQueue? = null
+
+    private val connState: ConnState = ConnState()
+
+    private var curDevice: BluetoothDevice? = null
+
+    private val retryHandler = Handler(Looper.getMainLooper())
+
+    private var retryMillis: Long = 1000
+
+    private var curGatt: BluetoothGatt? = null
 
     // 扫描器 = 前面比喻里的"收音机"
     private var scanner: BluetoothLeScanner? = null
@@ -69,6 +84,19 @@ class MainActivity : AppCompatActivity() {
             appendLog(if (ok) "权限已授予，点按钮开始扫描" else "权限被拒绝，无法扫描")
         }
 
+    private val retryRunnable : Runnable = object: Runnable{
+
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        override fun run() {
+            if (connState.getCurState() == ConnState.CONNECTED || connState.getCurState() == ConnState.CONNECTING) return
+            Log.i(TAG, "onConnectionStateChange: 开始尝试重连，retryMillis = $retryMillis ms")
+            connState.updateState(ConnState.CONNECTING)
+            curGatt?.disconnect()
+            curGatt?.close()
+            curGatt = curDevice?.connectGatt(applicationContext,false,gattCallback)
+        }
+
+    }
     @SuppressLint("MissingInflatedId", "MissingPermission")
     @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -85,7 +113,12 @@ class MainActivity : AppCompatActivity() {
         tvResult = findViewById(R.id.tvResult)
         rvDevice = findViewById(R.id.rv_device)
         bluetoothAdapter = BluetoothDeviceAdapter(null){ item ->
-            item.connectGatt(this,false,gattCallback)
+            if (connState.getCurState() == ConnState.CONNECTED || connState.getCurState() == ConnState.CONNECTING) return@BluetoothDeviceAdapter
+            connState.updateState(ConnState.CONNECTING)
+            curDevice = item
+            curGatt?.disconnect()
+            curGatt?.close()
+            curGatt = item.connectGatt(this,false,gattCallback)
 
         }
         rvDevice.adapter = bluetoothAdapter
@@ -186,9 +219,24 @@ class MainActivity : AppCompatActivity() {
             Log.i(TAG, "onConnectionStateChange: status = $status; newStatus = $newState")
 
             if (newState == BluetoothGatt.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS){
+                if (gatt !== curGatt) { Log.w(TAG, "⚠️ 不是当前连接的连接回调，忽略"); return }
+                connState.updateState(ConnState.CONNECTED)
+                retryMillis = 1000
                 gatt?.discoverServices()
             }else if (newState == BluetoothGatt.STATE_DISCONNECTED){
+                if (gatt !== curGatt) { Log.w(TAG, "⚠️ 旧连接的断开回调，忽略"); return }
                 Log.w(TAG, "❌ 连接失败/断开，status=$status")
+                connState.updateState(ConnState.DISCONNECTED)
+                queue?.clearQueue()
+                gatt?.close()
+                curGatt = null
+                if (retryMillis >= MAX_RETRY_MILLIS){
+                    connState.updateState(ConnState.IDLE)
+                    appendLog("设备识别不到")
+                    return
+                }
+                retryHandler.postDelayed(retryRunnable,retryMillis)
+                retryMillis *= 2
             }
         }
 
@@ -345,9 +393,15 @@ class MainActivity : AppCompatActivity() {
         tvResult.text = sb.toString()
     }
 
+    @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN])
     override fun onDestroy() {
         super.onDestroy()
-        queue?.clear()
+        queue?.clearQueue()
+        stopScan()
+        curGatt?.disconnect()
+        curGatt?.close()
+        curGatt = null
+        retryHandler.removeCallbacks(retryRunnable)
     }
 }
 
