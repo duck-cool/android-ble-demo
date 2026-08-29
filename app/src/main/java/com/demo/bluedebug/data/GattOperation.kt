@@ -2,6 +2,8 @@ package com.demo.bluedebug.data
 
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
+import java.util.UUID
+import kotlin.uuid.ExperimentalUuidApi
 
 class GattOperation (
     val type: OperationType,        // 干什么：READ / WRITE / WRITE_DESCRIPTOR / MTU
@@ -22,3 +24,20 @@ enum class OperationType{
 }
 
 class GattResult(val success: Boolean, val value: ByteArray?)
+
+sealed class BleInfoItem{
+    data class ServiceUiModel(
+        val uuid: String,
+        val displayName: String,
+        val characteristics: List<CharacteristicUiModel>,
+        val isExpanded: Boolean = false
+    ): BleInfoItem()
+
+    data class CharacteristicUiModel(
+        val uuid: String,
+        val service_uuid:String,
+        val displayName:String,
+        val properties: List<String>,
+        val value: ByteArray? = null
+    ): BleInfoItem()
+}

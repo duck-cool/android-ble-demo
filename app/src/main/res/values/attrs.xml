@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <declare-styleable name="TitleView">
+        <!-- 标题文本 -->
+        <attr name="titleText" format="string" />
+
+        <!-- 标题文字大小 -->
+        <attr name="titleTextSize" format="dimension" />
+
+        <!-- 标题文字大小 -->
+        <attr name="buttonSize" format="dimension" />
+
+        <!-- 标题文字颜色 -->
+        <attr name="titleTextColor" format="color" />
+
+        <!-- 背景颜色 -->
+        <attr name="barBackgroundColor" format="color" />
+    </declare-styleable>
+</resources>

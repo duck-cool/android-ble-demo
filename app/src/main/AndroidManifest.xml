@@ -28,6 +28,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity android:name=".ui.view.DeviceActivity" />
+        <activity android:name=".ui.BaseActivity" />
     </application>
 
 </manifest>

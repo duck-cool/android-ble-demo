@@ -4,45 +4,28 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothGatt
-import android.bluetooth.BluetoothGattCallback
-import android.bluetooth.BluetoothGattCharacteristic
-import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.os.ParcelUuid
 import android.util.Log
 import android.widget.Button
 import android.widget.TextView
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresPermission
-import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.demo.bluedebug.adpater.BluetoothDeviceAdapter
 import com.demo.bluedebug.data.BluetoothDeviceItem
-import com.demo.bluedebug.data.ConnState
-import com.demo.bluedebug.data.GattOperation
-import com.demo.bluedebug.data.GattOperationQueue
-import com.demo.bluedebug.data.GattResult
-import com.demo.bluedebug.data.OperationType
-import kotlinx.coroutines.Runnable
-import java.util.UUID
+import com.demo.bluedebug.ui.BaseActivity
+import com.demo.bluedebug.ui.view.DeviceActivity
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : BaseActivity() {
     companion object{
         val TAG = MainActivity::class.simpleName
         val MAX_RETRY_MILLIS: Long = 30000
@@ -53,18 +36,6 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var rvDevice: RecyclerView
     private lateinit var bluetoothAdapter: BluetoothDeviceAdapter
-
-    private var queue: GattOperationQueue? = null
-
-    private val connState: ConnState = ConnState()
-
-    private var curDevice: BluetoothDevice? = null
-
-    private val retryHandler = Handler(Looper.getMainLooper())
-
-    private var retryMillis: Long = 1000
-
-    private var curGatt: BluetoothGatt? = null
 
     // 扫描器 = 前面比喻里的"收音机"
     private var scanner: BluetoothLeScanner? = null
@@ -84,41 +55,19 @@ class MainActivity : AppCompatActivity() {
             appendLog(if (ok) "权限已授予，点按钮开始扫描" else "权限被拒绝，无法扫描")
         }
 
-    private val retryRunnable : Runnable = object: Runnable{
-
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        override fun run() {
-            if (connState.getCurState() == ConnState.CONNECTED || connState.getCurState() == ConnState.CONNECTING) return
-            Log.i(TAG, "onConnectionStateChange: 开始尝试重连，retryMillis = $retryMillis ms")
-            connState.updateState(ConnState.CONNECTING)
-            curGatt?.disconnect()
-            curGatt?.close()
-            curGatt = curDevice?.connectGatt(applicationContext,false,gattCallback)
-        }
-
-    }
     @SuppressLint("MissingInflatedId", "MissingPermission")
     @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
         setContentView(R.layout.activity_main)
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
-            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-            insets
-        }
 
         btnScan = findViewById(R.id.btnScan)
         tvResult = findViewById(R.id.tvResult)
         rvDevice = findViewById(R.id.rv_device)
         bluetoothAdapter = BluetoothDeviceAdapter(null){ item ->
-            if (connState.getCurState() == ConnState.CONNECTED || connState.getCurState() == ConnState.CONNECTING) return@BluetoothDeviceAdapter
-            connState.updateState(ConnState.CONNECTING)
-            curDevice = item
-            curGatt?.disconnect()
-            curGatt?.close()
-            curGatt = item.connectGatt(this,false,gattCallback)
+            val intent = Intent(this, DeviceActivity::class.java)
+            intent.putExtra("ble_device",item)
+            startActivity(intent)
 
         }
         rvDevice.adapter = bluetoothAdapter
@@ -128,8 +77,6 @@ class MainActivity : AppCompatActivity() {
         val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         val adapter: BluetoothAdapter = bluetoothManager.adapter
         scanner = adapter.bluetoothLeScanner
-
-
 
         btnScan.setOnClickListener {
             if (!hasPermission()) {
@@ -172,13 +119,7 @@ class MainActivity : AppCompatActivity() {
         tvResult.text = "正在扫描...\n"
         isScanning = true
         btnScan.text = "停止扫描"
-        // ★ 真正开始"听广播"。回调在 Binder 线程，不能直接改 UI！
-        val filter = listOf(ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid.fromString("0000180D-0000-1000-8000-00805F9B34FB"))
-            .build())
-        // ✅ 正确做法：传入默认的 ScanSettings
-        val scanSettings = ScanSettings.Builder().build()
-        scanner?.startScan(filter,scanSettings,scanCallback)
+        scanner?.startScan(scanCallback)
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
@@ -197,6 +138,7 @@ class MainActivity : AppCompatActivity() {
             val name = device.name ?: "(未命名)"
             val mac = device.address
             val rssi = result.rssi
+            Log.i(TAG, "onScanResult: name='$name', mac='$mac', rssi=$rssi, device=$device")
             if (!bluetoothDeviceMap.containsKey(mac)){
                 val deviceItem = BluetoothDeviceItem(name, mac, rssi, device)
                 bluetoothDeviceMap[mac] = deviceItem
@@ -212,196 +154,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private val gattCallback = object : BluetoothGattCallback(){
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
-            super.onConnectionStateChange(gatt, status, newState)
-            Log.i(TAG, "onConnectionStateChange: status = $status; newStatus = $newState")
-
-            if (newState == BluetoothGatt.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS){
-                if (gatt !== curGatt) { Log.w(TAG, "⚠️ 不是当前连接的连接回调，忽略"); return }
-                connState.updateState(ConnState.CONNECTED)
-                retryMillis = 1000
-                gatt?.discoverServices()
-            }else if (newState == BluetoothGatt.STATE_DISCONNECTED){
-                if (gatt !== curGatt) { Log.w(TAG, "⚠️ 旧连接的断开回调，忽略"); return }
-                Log.w(TAG, "❌ 连接失败/断开，status=$status")
-                connState.updateState(ConnState.DISCONNECTED)
-                queue?.clearQueue()
-                gatt?.close()
-                curGatt = null
-                if (retryMillis >= MAX_RETRY_MILLIS){
-                    connState.updateState(ConnState.IDLE)
-                    appendLog("设备识别不到")
-                    return
-                }
-                retryHandler.postDelayed(retryRunnable,retryMillis)
-                retryMillis *= 2
-            }
-        }
-
-
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
-            super.onServicesDiscovered(gatt, status)
-            if (status == BluetoothGatt.GATT_SUCCESS){
-                queue = GattOperationQueue({ gatt })
-                gatt?.services?.forEach { service ->
-                    Log.i(TAG, "onServicesDiscovered: Service UUID = ${service.uuid}")
-                }
-                gatt?.let {
-                    val characteristic =
-                        it.getService(UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb"))
-                            ?.getCharacteristic(
-                                UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb")
-                            )?: run { Log.w(TAG, "特征不存在"); return@let }
-
-                    it.setCharacteristicNotification(characteristic,true)
-                    val cccd =
-                        characteristic.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
-                    queue?.enQueue(GattOperation(OperationType.WRITE_DESCRIPTOR,null,cccd,byteArrayOf(0x01, 0x00)){})
-
-
-                    val battery_chr = it.getService(UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb"))
-                        ?.getCharacteristic(
-                            UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb"))?: run { Log.w(TAG, "特征不存在"); return@let }
-                    queue?.enQueue(GattOperation(OperationType.READ,battery_chr,null,data = null, onResult = { result ->
-                        if (result.success){
-                            val battery = result.value?.getOrNull(0)?.toInt() ?: -1
-                            Log.i(TAG, "🔋 电量: $battery%")
-                        }
-                    }))
-                    
-                    val led_char =
-                        it.getService(UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb"))
-                            ?.getCharacteristic(
-                                UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb")
-                            )?:run { Log.w(TAG, "特征不存在"); return@let }
-                    queue?.enQueue(GattOperation(OperationType.WRITE,led_char,null,byteArrayOf(0x01)){})
-                    queue?.enQueue(GattOperation(OperationType.MTU,null,null, null,mtu = 517, onResult = {}))
-                }
-            }else {
-                Log.w(TAG, "服务发现失败 status=$status")
-            }
-
-        }
-
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        override fun onCharacteristicRead(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            value: ByteArray,
-            status: Int
-        ) {
-            super.onCharacteristicRead(gatt, characteristic, value, status)
-            runOnUiThread {
-                val success = status == BluetoothGatt.GATT_SUCCESS
-                queue?.onOperationCompleted(OperationType.READ, success,
-                    GattResult(success, characteristic?.value),characteristic.uuid
-                )
-            }
-        }
-
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        override fun onCharacteristicRead(
-            gatt: BluetoothGatt?,
-            characteristic: BluetoothGattCharacteristic?,
-            status: Int
-        ) {
-            super.onCharacteristicRead(gatt, characteristic, status)
-            runOnUiThread {
-                val success = status == BluetoothGatt.GATT_SUCCESS
-                queue?.onOperationCompleted(OperationType.READ, success,
-                    GattResult(success, characteristic?.value),characteristic?.uuid
-                )
-            }
-        }
-
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        override fun onCharacteristicWrite(
-            gatt: BluetoothGatt?,
-            characteristic: BluetoothGattCharacteristic?,
-            status: Int
-        ) {
-            super.onCharacteristicWrite(gatt, characteristic, status)
-            Log.i(TAG, "onCharacteristicWrite: LED 写回执: status = $status")
-
-            runOnUiThread {
-                val success = status == BluetoothGatt.GATT_SUCCESS
-                queue?.onOperationCompleted(OperationType.WRITE, success,
-                    GattResult(success, characteristic?.value),characteristic?.uuid
-                )
-            }
-        }
-
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        override fun onMtuChanged(gatt: BluetoothGatt?, mtu: Int, status: Int) {
-            super.onMtuChanged(gatt, mtu, status)
-            Log.i(TAG, "onMtuChanged: \uD83D\uDCE6 MTU 协商结果: $mtu 字节")
-            runOnUiThread {
-                val success = status == BluetoothGatt.GATT_SUCCESS
-                queue?.onOperationCompleted(OperationType.MTU, success,
-                    GattResult(success, null),null
-                )
-            }
-        }
-
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        override fun onDescriptorWrite(
-            gatt: BluetoothGatt?,
-            descriptor: BluetoothGattDescriptor?,
-            status: Int
-        ) {
-            super.onDescriptorWrite(gatt, descriptor, status)
-            Log.i(TAG, "CCCD 写入回执: status=$status（0=订阅成功，设备将开始推数据）")
-            runOnUiThread {
-                val success = status == BluetoothGatt.GATT_SUCCESS
-                queue?.onOperationCompleted(OperationType.WRITE_DESCRIPTOR, success,
-                    GattResult(success, descriptor?.value),descriptor?.uuid
-                )
-            }
-        }
-
-        // ① 两参版本：Android 12 及以下（含你的 Android 10）走这个！
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-                 handleHeartRate(characteristic.value ?: ByteArray(0))
-        }
-
-        // ② 三参版本：Android 13+ 走这个
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            value: ByteArray
-        ) {
-            Log.i(TAG, "📥 收到推送! uuid=${characteristic.uuid} value=${characteristic.value?.joinToString() ?: "null"}")
-            handleHeartRate(value)
-        }
-
-        // ③ 统一处理
-        private fun handleHeartRate(value: ByteArray) {
-            if (value.isNotEmpty()) {
-                val hr = value[0].toInt() and 0xFF
-                Log.i(TAG, "❤️ 心率: $hr bpm")
-            }
-        }
-    }
-
     private fun appendLog(msg: String) {
         sb.append("💬 ").append(msg).append("\n")
         tvResult.text = sb.toString()
     }
 
-    @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN])
-    override fun onDestroy() {
-        super.onDestroy()
-        queue?.clearQueue()
+    @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
+    override fun onStop() {
+        super.onStop()
         stopScan()
-        curGatt?.disconnect()
-        curGatt?.close()
-        curGatt = null
-        retryHandler.removeCallbacks(retryRunnable)
     }
+
 }
 
