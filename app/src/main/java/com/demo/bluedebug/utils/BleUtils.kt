@@ -38,3 +38,26 @@ fun BluetoothGattCharacteristic.getCharacteristicName(): String {
     return characteristicNameMap[uuid.toString().lowercase()] ?: "自定义特征 ($uuid)"
 
 }
+
+/**
+ * 解析 hex 字符串为 ByteArray（Write 数据输入用，Q7）
+ * 规则：
+ *  - 空格分隔，每段 2 个 hex 字符 = 1 个字节，如 "01 02 FF"
+ *  - 容忍 "0x"/"0X" 前缀（"0x01" == "01"）
+ *  - 大小写不敏感（"ff" == "FF"）
+ *  - 非法输入（非 hex 字符 / 段长度≠2 / 空输入）→ 返回 null，由调用方提示错误
+ */
+fun parseHex(input: String): ByteArray? {
+    val trimmed = input.trim()
+    if (trimmed.isEmpty()) return null                     // 空输入
+    val parts = trimmed.split("\\s+".toRegex())            // 按空格切段
+    val bytes = mutableListOf<Byte>()
+    for (part in parts) {
+        var hex = part.trim()
+        if (hex.startsWith("0x", ignoreCase = true)) hex = hex.substring(2)   // 剥 0x 前缀
+        if (hex.length != 2) return null                   // 每段必须正好 2 位
+        val v = hex.toIntOrNull(16) ?: return null         // 非 hex 字符 → null
+        bytes.add(v.toByte())
+    }
+    return bytes.toByteArray()
+}

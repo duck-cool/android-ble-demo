@@ -10,6 +10,7 @@ import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.demo.bluedebug.R
 import com.demo.bluedebug.data.BleInfoItem
+import com.demo.bluedebug.data.OperationType
 
 class DeviceServiceAdapter(
     val onItemClick:(BleInfoItem) -> Unit,
@@ -44,18 +45,15 @@ class DeviceServiceAdapter(
                 val rootView = inflater.inflate(R.layout.layout_characteristic_item,parent,false)
                 CharacteristicViewHolder(rootView)
             }
-            else -> throw IllegalArgumentException("UnKown viewType = $viewType")
+            else -> throw IllegalArgumentException("UnKnow viewType = $viewType")
         }
     }
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
-        val item = getItem(position)
-        when(item){
+        when(val item = getItem(position)){
             is BleInfoItem.ServiceUiModel -> (holder as ServiceViewHolder).bind(item)
             is BleInfoItem.CharacteristicUiModel -> (holder as CharacteristicViewHolder).bind(item)
         }
-
-//        holder.itemView.setOnClickListener { onItemClick(item) }
     }
 
 
@@ -70,15 +68,21 @@ class DeviceServiceAdapter(
             val rotation = if (item.isExpanded) 90f else 0f
             rightIv.animate().rotation(rotation).setDuration(200).start()
 
-            rightIv.setOnClickListener { onExpandClick(item.uuid) }
+            itemView.setOnClickListener { onExpandClick(item.uuid) }
         }
     }
 
     inner class CharacteristicViewHolder(rootView: View): RecyclerView.ViewHolder(rootView){
         private val tvContent = rootView.findViewById<TextView>(R.id.tvContent)
+        private val tvDetail = rootView.findViewById<TextView>(R.id.tvDetail)
 
         fun bind(item: BleInfoItem.CharacteristicUiModel){
             tvContent.text = item.displayName
+            // Q3 批改落地：特征"能干什么"由属性决定，上屏给工程师看
+            tvDetail.text = "属性: " + item.properties.joinToString(" | ")
+            itemView.setOnClickListener {
+                onItemClick(item)
+            }
         }
     }
 

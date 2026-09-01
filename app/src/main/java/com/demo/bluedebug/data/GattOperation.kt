@@ -38,6 +38,7 @@ sealed class BleInfoItem{
         val service_uuid:String,
         val displayName:String,
         val properties: List<String>,
+        var operationType: OperationType?,
         val value: ByteArray? = null
     ): BleInfoItem()
 }

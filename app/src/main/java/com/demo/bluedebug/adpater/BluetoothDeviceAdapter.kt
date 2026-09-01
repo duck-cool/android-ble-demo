@@ -26,7 +26,7 @@ class BluetoothDeviceAdapter(
     fun setItem(device: BluetoothDeviceItem){
         if (device != null){
             list.add(device)
-            notifyItemChanged(list.size)
+            notifyItemInserted(list.size-1)
         }
     }
 
