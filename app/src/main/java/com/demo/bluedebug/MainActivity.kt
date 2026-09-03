@@ -12,18 +12,23 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresPermission
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.demo.bluedebug.adpater.BluetoothDeviceAdapter
 import com.demo.bluedebug.data.BluetoothDeviceItem
 import com.demo.bluedebug.ui.BaseActivity
 import com.demo.bluedebug.ui.view.DeviceActivity
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 class MainActivity : BaseActivity() {
     companion object{
@@ -163,6 +168,21 @@ class MainActivity : BaseActivity() {
     override fun onStop() {
         super.onStop()
         stopScan()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        lifecycleScope.launch {
+            waitForAnswer(3000)
+        }
+    }
+
+    suspend fun waitForAnswer(ms: Long) : String = suspendCancellableCoroutine { cout ->
+        Handler(Looper.getMainLooper()).postDelayed({
+            cout.resume("答案来了",{})
+            Log.i(TAG, "onResume: $ms")
+        },ms)
+
     }
 
 }

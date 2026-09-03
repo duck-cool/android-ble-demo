@@ -22,6 +22,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.annotation.RequiresPermission
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.DefaultItemAnimator
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -32,15 +33,16 @@ import com.demo.bluedebug.adpater.DeviceServiceAdapter
 import com.demo.bluedebug.data.BleInfoItem
 import com.demo.bluedebug.data.ConnState
 import com.demo.bluedebug.data.GattOperation
-import com.demo.bluedebug.data.GattOperationQueue
 import com.demo.bluedebug.data.GattResult
 import com.demo.bluedebug.data.OperationType
 import com.demo.bluedebug.ui.BaseActivity
 import com.demo.bluedebug.ui.view.model.ExpandableViewModel
+import com.demo.bluedebug.utils.GattClient
 import com.demo.bluedebug.utils.getCharacteristicName
 import com.demo.bluedebug.utils.getDisplayName
 import com.demo.bluedebug.utils.parseHex
 import kotlinx.coroutines.Runnable
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -50,16 +52,16 @@ class DeviceActivity: BaseActivity() {
 
     private val viewModel: ExpandableViewModel by viewModels()
     private lateinit var bleDevice: BluetoothDevice
-
-    private var queue: GattOperationQueue? = null
+    private var gattClient: GattClient? = null
 
     private val connState: ConnState = ConnState()
-
-    private var curDevice: BluetoothDevice? = null
 
     private val retryHandler = Handler(Looper.getMainLooper())
 
     private var retryMillis: Long = 1000
+
+    /** 重连任务是否已排队（去重：任何时刻最多一个 pending 的重连任务） */
+    private var reconnectPending = false
 
     private var curGatt: BluetoothGatt? = null
     
@@ -74,14 +76,41 @@ class DeviceActivity: BaseActivity() {
 
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun run() {
-            if (connState.getCurState() == ConnState.CONNECTED || connState.getCurState() == ConnState.CONNECTING) return
+            reconnectPending = false          // 任务已执行，占位释放
+            if (connState.getCurState() == ConnState.CONNECTED) return   // 已连上（期间回调成功），停
+            // ⚠️ 不再检查 CONNECTING：上一轮 connectGatt 可能一直没回调（设备消失），
+            //    看门狗强制清掉旧的、重新发起，而不是死等
             Log.i(TAG, "onConnectionStateChange: 开始尝试重连，retryMillis = $retryMillis ms")
             connState.updateState(ConnState.CONNECTING)
-            curGatt?.disconnect()
+            curGatt?.disconnect()             // 旧连接可能还挂着（没失败回调）→ 强制断开
             curGatt?.close()
-            curGatt = curDevice?.connectGatt(applicationContext,false,gattCallback)
+            curGatt = null
+            // ⚠️ 用 bleDevice（intent 传入的设备），之前误用从未赋值的 curDevice → connectGatt 永远返回 null
+            val newGatt = bleDevice.connectGatt(this@DeviceActivity, false, gattCallback)
+            if (newGatt == null) {
+                // connectGatt 返回 null = 连接发起失败（空安全 ?. 会静默吞掉，必须显式检查！）
+                Log.w(TAG, "⚠️ connectGatt 返回 null，本次重连发起失败")
+            } else {
+                curGatt = newGatt
+            }
+            scheduleReconnect()               // 关键：无论这次成败，退避后必再来一轮（自驱动）
         }
 
+    }
+
+    /** 安排下一次重连（定时自驱动 + 指数退避 + 上限 + 去重） */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private fun scheduleReconnect() {
+        if (reconnectPending) return                            // 已有一个在排队，不重复
+        if (connState.getCurState() == ConnState.CONNECTED) return  // 连上了，停
+        if (retryMillis >= MAX_RETRY_MILLIS) {                  // 退避到上限：不再放弃，封顶 30s 持续低频重试
+            retryMillis = MAX_RETRY_MILLIS                       // 设备随时可能回来，永久低频尝试比永久放弃好
+            appendLog("⏳ 设备仍不可达，每 30s 持续尝试…")
+        }
+        reconnectPending = true
+        val delayMs = retryMillis
+        retryHandler.postDelayed(retryRunnable, delayMs)
+        retryMillis *= 2                                        // 指数退避：1s→2s→4s→8s→16s
     }
 
 
@@ -109,8 +138,8 @@ class DeviceActivity: BaseActivity() {
                                 else -> info.operationType = null
                             }
                             Toast.makeText(this, "选择了: $selectedDevice", Toast.LENGTH_SHORT).show()
-                            handleClickInfo(info)
                             Log.i(TAG, "onCreate: 选择了: [${info.displayName}]$selectedDevice")
+                            handleClickInfo(info)
                         }
                         builder.setNegativeButton("取消",null)
                         builder.show()
@@ -175,16 +204,21 @@ class DeviceActivity: BaseActivity() {
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun handleClickInfo(info: BleInfoItem){
+        if (connState.getCurState() != ConnState.CONNECTED){
+            appendLog("⚠\uFE0F 设备未就绪（当前状态 ${connState.getCurState()}），操作被拒绝")
+            return
+        }
         if (info is BleInfoItem.CharacteristicUiModel){
             when(info.operationType){
                 OperationType.READ -> {
                     val characteristic =
                         curGatt?.getService(UUID.fromString(info.service_uuid))
                             ?.getCharacteristic(UUID.fromString(info.uuid))?: run { Log.w(TAG, "OperationType.READ特征不存在"); return}
-                    queue?.enQueue(GattOperation(OperationType.READ,characteristic,null,data = null, onResult = { result ->
-                        appendLog("[READ] ${info.displayName} → ${if (result.success) "成功" else "失败"} value=${toHex(result.value)}")
-                    }))
-
+                    lifecycleScope.launch {
+                        val result = gattClient?.read(characteristic) ?: GattResult.FAILURE
+                        appendLog("[READ] ${info.displayName} → ${if (result.success) "成功" else "失败: ${result.msg}"} value=${toHex(result.value)}")
+                        Log.i(TAG, "handleClickInfo: [READ] ${info.displayName} → ${if (result.success) "成功" else "失败: ${result.msg}"}")
+                    }
                 }
                 OperationType.WRITE_DESCRIPTOR ->{
                     val characteristic =
@@ -196,9 +230,10 @@ class DeviceActivity: BaseActivity() {
                     curGatt?.setCharacteristicNotification(characteristic,true)
                     val cccd =
                         characteristic.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
-                    queue?.enQueue(GattOperation(OperationType.WRITE_DESCRIPTOR,null,cccd,byteArrayOf(0x01, 0x00)){
-                        appendLog("[订阅] ${info.displayName} → ${if (it.success) "成功，等待推送" else "失败"}")
-                    })
+                    lifecycleScope.launch {
+                        val result = gattClient?.subscribe(characteristic,cccd,true) ?: GattResult.FAILURE
+                        appendLog("[订阅] ${info.displayName} → ${if (result.success) "成功，等待推送" else "失败: ${result.msg}"}")
+                    }
                 }
                 OperationType.WRITE -> {
                     val characteristic =
@@ -254,9 +289,10 @@ class DeviceActivity: BaseActivity() {
                     errorTv.visibility = View.VISIBLE
                     Toast.makeText(this, "数据格式错误，未发送", Toast.LENGTH_SHORT).show()
                 } else {
-                    queue?.enQueue(GattOperation(OperationType.WRITE, characteristic, null, bytes) {
-                        appendLog("[WRITE] ${info.displayName} → ${if (it.success) "成功，已发送 ${toHex(bytes)}" else "失败"}")
-                    })
+                    lifecycleScope.launch {
+                        val result = gattClient?.write(characteristic, bytes) ?: GattResult.FAILURE
+                        appendLog("[WRITE] ${info.displayName} → ${if (result.success) "成功，已发送 ${toHex(bytes)}" else "失败: ${result.msg}"}")
+                    }
                 }
             }
             .setNegativeButton("取消", null)
@@ -279,18 +315,11 @@ class DeviceActivity: BaseActivity() {
                 if (gatt !== curGatt) { Log.w(TAG, "⚠️ 旧连接的断开回调，忽略"); return }
                 Log.w(TAG, "❌ 连接失败/断开，status=$status")
                 connState.updateState(ConnState.DISCONNECTED)
-                queue?.clearQueue()
                 gatt?.close()
+                gattClient = null
                 curGatt = null
-                if (retryMillis >= MAX_RETRY_MILLIS){
-                    connState.updateState(ConnState.IDLE)
-                    appendLog("❌ 重连次数用尽，放弃（设备识别不到）")
-//                    TODO appendLog("设备识别不到")
-                    return
-                }
-                appendLog("❌ 连接断开 status=$status，${retryMillis}ms 后重连…")
-                retryHandler.postDelayed(retryRunnable,retryMillis)
-                retryMillis *= 2
+                appendLog("❌ 连接断开 status=$status，准备重连…")
+                scheduleReconnect()   // 统一入口：内部做退避/上限/去重判断
             }
         }
 
@@ -299,7 +328,7 @@ class DeviceActivity: BaseActivity() {
         override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
             super.onServicesDiscovered(gatt, status)
             if (status == BluetoothGatt.GATT_SUCCESS){
-                queue = GattOperationQueue({ gatt })
+                gattClient = gatt?.let { GattClient(it) }
                 curGatt = gatt
                 appendLog("📡 服务发现完成，共 ${gatt?.services?.size ?: 0} 个服务")
                 val serviceList = gatt?.services?.map { service ->
@@ -353,12 +382,7 @@ class DeviceActivity: BaseActivity() {
             status: Int
         ) {
             super.onCharacteristicRead(gatt, characteristic, value, status)
-            runOnUiThread {
-                val success = status == BluetoothGatt.GATT_SUCCESS
-                queue?.onOperationCompleted(OperationType.READ, success,
-                    GattResult(success, characteristic?.value),characteristic.uuid
-                )
-            }
+            gattClient?.onCharacteristicRead(characteristic,status,value)
         }
 
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -368,12 +392,10 @@ class DeviceActivity: BaseActivity() {
             status: Int
         ) {
             super.onCharacteristicRead(gatt, characteristic, status)
-            runOnUiThread {
-                val success = status == BluetoothGatt.GATT_SUCCESS
-                queue?.onOperationCompleted(OperationType.READ, success,
-                    GattResult(success, characteristic?.value),characteristic?.uuid
-                )
+            characteristic?.let {
+                gattClient?.onCharacteristicRead(it,status,it.value)
             }
+
         }
 
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -384,12 +406,8 @@ class DeviceActivity: BaseActivity() {
         ) {
             super.onCharacteristicWrite(gatt, characteristic, status)
             Log.i(TAG, "onCharacteristicWrite: LED 写回执: status = $status")
-
-            runOnUiThread {
-                val success = status == BluetoothGatt.GATT_SUCCESS
-                queue?.onOperationCompleted(OperationType.WRITE, success,
-                    GattResult(success, characteristic?.value),characteristic?.uuid
-                )
+            characteristic?.let {
+                gattClient?.onCharacteristicWrite(it,status)
             }
         }
 
@@ -399,9 +417,7 @@ class DeviceActivity: BaseActivity() {
             Log.i(TAG, "onMtuChanged: \uD83D\uDCE6 MTU 协商结果: $mtu 字节")
             runOnUiThread {
                 val success = status == BluetoothGatt.GATT_SUCCESS
-                queue?.onOperationCompleted(OperationType.MTU, success,
-                    GattResult(success, null),null
-                )
+
             }
         }
 
@@ -413,11 +429,8 @@ class DeviceActivity: BaseActivity() {
         ) {
             super.onDescriptorWrite(gatt, descriptor, status)
             Log.i(TAG, "CCCD 写入回执: status=$status（0=订阅成功，设备将开始推数据）")
-            runOnUiThread {
-                val success = status == BluetoothGatt.GATT_SUCCESS
-                queue?.onOperationCompleted(OperationType.WRITE_DESCRIPTOR, success,
-                    GattResult(success, descriptor?.value),descriptor?.uuid
-                )
+            descriptor?.let {
+                gattClient?.onDescriptorWrite(it,status)
             }
         }
 
@@ -439,6 +452,7 @@ class DeviceActivity: BaseActivity() {
         }
 
         // ③ 统一处理
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         private fun handleHeartRate(value: ByteArray) {
             if (value.isNotEmpty()) {
                 val hr = value[0].toInt() and 0xFF
@@ -452,10 +466,10 @@ class DeviceActivity: BaseActivity() {
     @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN])
     override fun onDestroy() {
         super.onDestroy()
-        queue?.clearQueue()
         curGatt?.disconnect()
         curGatt?.close()
         curGatt = null
         retryHandler.removeCallbacks(retryRunnable)
+        reconnectPending = false
     }
 }
