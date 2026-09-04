@@ -61,3 +61,8 @@ fun parseHex(input: String): ByteArray? {
     }
     return bytes.toByteArray()
 }
+
+// 机器原样 hex：调试工具的通用语言（0x58 而不是 88）
+fun toHex(value: ByteArray?): String {
+    return value?.joinToString(" ") { "%02X".format(it) } ?: "-"
+}

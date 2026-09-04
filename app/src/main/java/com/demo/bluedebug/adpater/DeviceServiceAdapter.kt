@@ -10,7 +10,6 @@ import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.demo.bluedebug.R
 import com.demo.bluedebug.data.BleInfoItem
-import com.demo.bluedebug.data.OperationType
 
 class DeviceServiceAdapter(
     val onItemClick:(BleInfoItem) -> Unit,

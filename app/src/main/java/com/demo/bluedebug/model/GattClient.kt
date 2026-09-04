@@ -1,4 +1,4 @@
-package com.demo.bluedebug.utils
+package com.demo.bluedebug.model
 
 import android.Manifest
 import android.bluetooth.BluetoothGatt
@@ -13,6 +13,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.UUID
 import kotlin.coroutines.resume
 
 class GattClient(private val gatt: BluetoothGatt) {
@@ -28,9 +29,9 @@ class GattClient(private val gatt: BluetoothGatt) {
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     suspend fun read(char: BluetoothGattCharacteristic): GattResult = mutex.withLock {
-        (withTimeoutOrNull(5000){
-            if (!sendWithBusyRetry { gatt.readCharacteristic(char) }){
-                return@withTimeoutOrNull GattResult.BUSY_FAILED
+        (withTimeoutOrNull(5000) {
+            if (!sendWithBusyRetry { gatt.readCharacteristic(char) }) {
+                return@withTimeoutOrNull GattResult.Companion.BUSY_FAILED
             }
 
             suspendCancellableCoroutine { cont ->
@@ -40,17 +41,17 @@ class GattClient(private val gatt: BluetoothGatt) {
                 }
             }
 
-        }?: GattResult.TIMEOUT) as GattResult
+        } ?: GattResult.Companion.TIMEOUT) as GattResult
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    suspend fun write(char: BluetoothGattCharacteristic,data: ByteArray): GattResult = mutex.withLock {
-        (withTimeoutOrNull(5000){
+    suspend fun write(char: BluetoothGattCharacteristic, data: ByteArray): GattResult = mutex.withLock {
+        (withTimeoutOrNull(5000) {
             if (!sendWithBusyRetry(send = {
-                char.value = data
+                    char.value = data
                     gatt.writeCharacteristic(char)
-                })){
-                return@withTimeoutOrNull GattResult.BUSY_FAILED
+                })) {
+                return@withTimeoutOrNull GattResult.Companion.BUSY_FAILED
             }
 
             suspendCancellableCoroutine { cont ->
@@ -59,7 +60,7 @@ class GattClient(private val gatt: BluetoothGatt) {
                     if (pendingWrite?.second === cont) pendingWrite = null
                 }
             }
-        }?: GattResult.TIMEOUT) as GattResult
+        } ?: GattResult.Companion.TIMEOUT) as GattResult
     }
 
     /***
@@ -67,15 +68,15 @@ class GattClient(private val gatt: BluetoothGatt) {
      */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     suspend fun subscribe(char: BluetoothGattCharacteristic, cccd: BluetoothGattDescriptor, enable: Boolean): GattResult = mutex.withLock {
-        (withTimeoutOrNull(5000){
-            if (!gatt.setCharacteristicNotification(char,enable)){
-                return@withTimeoutOrNull GattResult.BUSY_FAILED
+        (withTimeoutOrNull(5000) {
+            if (!gatt.setCharacteristicNotification(char, enable)) {
+                return@withTimeoutOrNull GattResult.Companion.BUSY_FAILED
             }
-            if (!sendWithBusyRetry{
-                cccd.value = if(enable) byteArrayOf(0x01,0x00) else byteArrayOf(0x00,0x00)
-                gatt.writeDescriptor(cccd)
-            } ){
-                return@withTimeoutOrNull GattResult.BUSY_FAILED
+            if (!sendWithBusyRetry {
+                    cccd.value = if (enable) byteArrayOf(0x01, 0x00) else byteArrayOf(0x00, 0x00)
+                    gatt.writeDescriptor(cccd)
+                }) {
+                return@withTimeoutOrNull GattResult.Companion.BUSY_FAILED
             }
 
             suspendCancellableCoroutine { cont ->
@@ -85,7 +86,7 @@ class GattClient(private val gatt: BluetoothGatt) {
                     if (pendingNotify?.second === cont) pendingNotify = null
                 }
             }
-        }?: GattResult.TIMEOUT) as GattResult
+        } ?: GattResult.Companion.TIMEOUT) as GattResult
     }
 
     private suspend fun sendWithBusyRetry(send: () -> Boolean): Boolean{
@@ -99,12 +100,12 @@ class GattClient(private val gatt: BluetoothGatt) {
         return false
     }
 
-    fun onCharacteristicRead(char: BluetoothGattCharacteristic,status: Int,value: ByteArray?){
+    fun onCharacteristicRead(char: BluetoothGattCharacteristic, status: Int, value: ByteArray?){
         val (expectedChar,cont) = pendingRead?:return
         if (expectedChar.uuid != char.uuid) return
         pendingRead = null
         val ret = status == BluetoothGatt.GATT_SUCCESS
-        cont.resume(GattResult(ret,value,if(ret) "Success" else "Failure"))
+        cont.resume(GattResult(ret, value, if (ret) "Success" else "Failure"))
     }
 
     fun onCharacteristicWrite(
@@ -115,7 +116,7 @@ class GattClient(private val gatt: BluetoothGatt) {
         if (expectedChar.uuid != char.uuid) return
         pendingWrite = null
         val ret = status == BluetoothGatt.GATT_SUCCESS
-        cont.resume(GattResult(ret,null,if(ret) "Success" else "Failure"))
+        cont.resume(GattResult(ret, null, if (ret) "Success" else "Failure"))
     }
 
     fun onDescriptorWrite(
@@ -126,6 +127,10 @@ class GattClient(private val gatt: BluetoothGatt) {
         if (expectedDes.characteristic.uuid != descriptor.characteristic.uuid) return
         pendingNotify = null
         val ret = status == BluetoothGatt.GATT_SUCCESS
-        cont.resume(GattResult(ret,null,if(ret) "Success" else "Failure"))
+        cont.resume(GattResult(ret, null, if (ret) "Success" else "Failure"))
+    }
+
+    fun getCharacteristic(serviceUuid:String,charUuid:String): BluetoothGattCharacteristic?{
+        return gatt.getService(UUID.fromString(serviceUuid))?.getCharacteristic(UUID.fromString(charUuid))
     }
 }
