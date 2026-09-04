@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
     <application
         android:allowBackup="true"
@@ -31,6 +34,7 @@
 
         <activity android:name=".ui.view.DeviceActivity" />
         <activity android:name=".ui.BaseActivity" />
+        <service android:name=".service.BleForegroundService" android:foregroundServiceType="connectedDevice" />
     </application>
 
 </manifest>

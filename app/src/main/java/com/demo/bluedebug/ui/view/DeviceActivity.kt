@@ -3,7 +3,9 @@ package com.demo.bluedebug.ui.view
 import android.Manifest
 import android.app.AlertDialog
 import android.bluetooth.BluetoothDevice
+import android.content.Intent
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
@@ -15,6 +17,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.viewModels
+import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresPermission
 import androidx.recyclerview.widget.DefaultItemAnimator
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -25,6 +28,7 @@ import com.demo.bluedebug.adpater.DeviceServiceAdapter
 import com.demo.bluedebug.data.BleInfoItem
 import com.demo.bluedebug.data.ConnState
 import com.demo.bluedebug.data.MsgLevel
+import com.demo.bluedebug.service.BleForegroundService
 import com.demo.bluedebug.ui.BaseActivity
 import com.demo.bluedebug.ui.view.model.BleDeviceViewModel
 import com.demo.bluedebug.ui.view.model.ExpandableViewModel
@@ -45,6 +49,7 @@ class DeviceActivity: BaseActivity() {
 
     private lateinit var tvLog: TextView
 
+    @RequiresApi(Build.VERSION_CODES.O)
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -123,6 +128,8 @@ class DeviceActivity: BaseActivity() {
                 }
             }
         }
+        val intent = Intent(this, BleForegroundService::class.java)
+        startForegroundService(intent)
         bleViewModel.start(bleDevice)
 
     }

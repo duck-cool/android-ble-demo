@@ -7,11 +7,13 @@ import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
+import android.content.Intent
 import android.util.Log
 import androidx.annotation.RequiresPermission
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.application
 import androidx.lifecycle.viewModelScope
 import com.demo.bluedebug.MainActivity.Companion.MAX_RETRY_MILLIS
 import com.demo.bluedebug.data.BleInfoItem
@@ -20,6 +22,7 @@ import com.demo.bluedebug.data.GattResult
 import com.demo.bluedebug.data.MsgLevel
 import com.demo.bluedebug.data.UiMessage
 import com.demo.bluedebug.model.GattClient
+import com.demo.bluedebug.service.BleForegroundService
 import com.demo.bluedebug.utils.getCharacteristicName
 import com.demo.bluedebug.utils.getDisplayName
 import com.demo.bluedebug.utils.toHex
@@ -57,7 +60,7 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
             return
         }
         this.bleDevice = device
-        device.connectGatt(getApplication(),false,gattCallback)
+        device.connectGatt(application,false,gattCallback)
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -135,7 +138,7 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
         curGatt?.disconnect()
         curGatt?.close()
         curGatt = null
-        val newGatt = bleDevice?.connectGatt(getApplication(), false, gattCallback)
+        val newGatt = bleDevice?.connectGatt(application, false, gattCallback)
         if (newGatt == null) {
             // connectGatt 返回 null = 连接发起失败（空安全 ?. 会静默吞掉，必须显式检查！）
             Log.w(TAG, "⚠️ connectGatt 返回 null，本次重连发起失败")
@@ -303,7 +306,13 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun onCleared() {
+        Log.i(TAG, "onCleared: viewModel destory")
         super.onCleared()
+
+        // 先摘壳再断连：壳保护连接，连接要死了壳先退（语义自洽）；stopService 触发 Service.onDestroy 是异步的，不挡断连收尾
+        val intent = Intent(application, BleForegroundService::class.java)
+        application.stopService(intent)
+
         curGatt?.disconnect()
         curGatt?.close()
         curGatt = null
