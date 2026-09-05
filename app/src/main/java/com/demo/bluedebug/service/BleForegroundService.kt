@@ -1,6 +1,5 @@
 package com.demo.bluedebug.service
 
-import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,11 +7,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import com.demo.bluedebug.R
 
@@ -59,6 +56,7 @@ class BleForegroundService: Service() {
 
     private fun createNotification(): Notification{
         return NotificationCompat.Builder(baseContext,BLE_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_ble_launcher_foreground)
             .setContentTitle("BLE Tool")
             .setContentText("Ble保活 | 状态: 已连接")
             .setPriority(NotificationCompat.PRIORITY_LOW)
