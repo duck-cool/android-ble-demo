@@ -31,7 +31,7 @@ class GattClient(private val gatt: BluetoothGatt) {
     suspend fun read(char: BluetoothGattCharacteristic): GattResult = mutex.withLock {
         (withTimeoutOrNull(5000) {
             if (!sendWithBusyRetry { gatt.readCharacteristic(char) }) {
-                return@withTimeoutOrNull GattResult.Companion.BUSY_FAILED
+                return@withTimeoutOrNull GattResult.BUSY_FAILED
             }
 
             suspendCancellableCoroutine { cont ->
@@ -41,7 +41,7 @@ class GattClient(private val gatt: BluetoothGatt) {
                 }
             }
 
-        } ?: GattResult.Companion.TIMEOUT) as GattResult
+        } ?: GattResult.TIMEOUT) as GattResult
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -51,7 +51,7 @@ class GattClient(private val gatt: BluetoothGatt) {
                     char.value = data
                     gatt.writeCharacteristic(char)
                 })) {
-                return@withTimeoutOrNull GattResult.Companion.BUSY_FAILED
+                return@withTimeoutOrNull GattResult.BUSY_FAILED
             }
 
             suspendCancellableCoroutine { cont ->
@@ -60,7 +60,7 @@ class GattClient(private val gatt: BluetoothGatt) {
                     if (pendingWrite?.second === cont) pendingWrite = null
                 }
             }
-        } ?: GattResult.Companion.TIMEOUT) as GattResult
+        } ?: GattResult.TIMEOUT) as GattResult
     }
 
     /***
@@ -70,13 +70,13 @@ class GattClient(private val gatt: BluetoothGatt) {
     suspend fun subscribe(char: BluetoothGattCharacteristic, cccd: BluetoothGattDescriptor, enable: Boolean): GattResult = mutex.withLock {
         (withTimeoutOrNull(5000) {
             if (!gatt.setCharacteristicNotification(char, enable)) {
-                return@withTimeoutOrNull GattResult.Companion.BUSY_FAILED
+                return@withTimeoutOrNull GattResult.BUSY_FAILED
             }
             if (!sendWithBusyRetry {
                     cccd.value = if (enable) byteArrayOf(0x01, 0x00) else byteArrayOf(0x00, 0x00)
                     gatt.writeDescriptor(cccd)
                 }) {
-                return@withTimeoutOrNull GattResult.Companion.BUSY_FAILED
+                return@withTimeoutOrNull GattResult.BUSY_FAILED
             }
 
             suspendCancellableCoroutine { cont ->
@@ -86,7 +86,7 @@ class GattClient(private val gatt: BluetoothGatt) {
                     if (pendingNotify?.second === cont) pendingNotify = null
                 }
             }
-        } ?: GattResult.Companion.TIMEOUT) as GattResult
+        } ?: GattResult.TIMEOUT) as GattResult
     }
 
     private suspend fun sendWithBusyRetry(send: () -> Boolean): Boolean{
