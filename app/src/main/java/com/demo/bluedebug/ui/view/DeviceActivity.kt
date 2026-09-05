@@ -103,14 +103,6 @@ class DeviceActivity: BaseActivity() {
         }
         
         val bleDevice = intent.extras?.get("ble_device") as BluetoothDevice
-        bleViewModel.connState.observe(this){state ->
-            when(state){
-                ConnState.CONNECTED -> appendLog("✅ 连接成功，正在发现服务…")
-                ConnState.DISCONNECTED -> appendLog("❌ 连接断开，准备重连…")
-                ConnState.CONNECTING -> appendLog("✅ 正在连接设备…")
-                else -> {}
-            }
-        }
         bleViewModel.serviceData.observe(this){ list->
             list?.let {
                 viewModel.loadDate(it)

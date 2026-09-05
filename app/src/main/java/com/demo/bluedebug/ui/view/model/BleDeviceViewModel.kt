@@ -19,6 +19,7 @@ import com.demo.bluedebug.MainActivity.Companion.MAX_RETRY_MILLIS
 import com.demo.bluedebug.data.BleInfoItem
 import com.demo.bluedebug.data.ConnState
 import com.demo.bluedebug.data.GattResult
+import com.demo.bluedebug.data.LogLevel
 import com.demo.bluedebug.data.MsgLevel
 import com.demo.bluedebug.data.UiMessage
 import com.demo.bluedebug.model.GattClient
@@ -38,8 +39,8 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
     }
 
     //BLE connect State
-    private val _connState: MutableLiveData<Int> = MutableLiveData(ConnState.IDLE)
-    val connState: LiveData<Int> = _connState
+    private val _connState: MutableLiveData<ConnState> = MutableLiveData(ConnState.IDLE)
+    val connState: LiveData<ConnState> = _connState
     private val _serviceData: MutableLiveData<List<BleInfoItem.ServiceUiModel>> = MutableLiveData()
     val serviceData: LiveData<List<BleInfoItem.ServiceUiModel>> = _serviceData
 
@@ -60,21 +61,28 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
             return
         }
         this.bleDevice = device
+        _message.postValue(UiMessage(
+            "正在连接设备…",
+            MsgLevel.LOG,
+            LogLevel.INFO
+        ))
+        _connState.postValue(ConnState.CONNECTING)
         device.connectGatt(application,false,gattCallback)
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun read(serviceUuid:String,charUuid:String,displayName: String){
         if (_connState.value != ConnState.CONNECTED) {
-            _message.postValue(UiMessage("⚠\uFE0F 设备未就绪…", MsgLevel.TOAST))
+            _message.postValue(UiMessage("⚠\uFE0F 设备未就绪…", MsgLevel.BOTH, LogLevel.INFO))
             return
         }
         val char = gattClient?.getCharacteristic(serviceUuid,charUuid)?: return
         viewModelScope.launch {
             val result = gattClient?.read(char) ?: GattResult.FAILURE
             _message.postValue(UiMessage(
-                "[READ] $displayName → ${if (result.success) "成功" else "失败: ${result.msg}"} value=${toHex(result.value)}",
-                MsgLevel.BOTH
+                "[READ] $displayName → ${if (result.success) "[成功]" else "[失败]: ${result.msg}"} value=${toHex(result.value)}",
+                MsgLevel.BOTH,
+                if (result.success) LogLevel.INFO else LogLevel.ERROR
             ))   // 结果消息
         }
     }
@@ -82,15 +90,16 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun write(serviceUuid:String,charUuid:String,displayName: String,data: ByteArray){
         if (_connState.value != ConnState.CONNECTED) {
-            _message.postValue(UiMessage("⚠\uFE0F 设备未就绪…", MsgLevel.TOAST))
+            _message.postValue(UiMessage("⚠\uFE0F 设备未就绪…", MsgLevel.BOTH, LogLevel.INFO))
             return
         }
         val char = gattClient?.getCharacteristic(serviceUuid,charUuid)?: return
         viewModelScope.launch {
             val result = gattClient?.write(char,data) ?: GattResult.FAILURE
             _message.postValue(UiMessage(
-                "[WRITE] $displayName → ${if (result.success) "成功" else "失败: ${result.msg}"}" ,
-                MsgLevel.BOTH
+                "[WRITE] $displayName → ${if (result.success) "[成功]" else "[失败]: ${result.msg}"}" ,
+                MsgLevel.BOTH,
+                if (result.success) LogLevel.INFO else LogLevel.ERROR
             ))   // 结果消息
         }
     }
@@ -98,7 +107,7 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun notify(serviceUuid:String,charUuid:String,displayName: String,enable: Boolean){
         if (_connState.value != ConnState.CONNECTED) {
-            _message.postValue(UiMessage("⚠\uFE0F 设备未就绪…", MsgLevel.TOAST))
+            _message.postValue(UiMessage("⚠\uFE0F 设备未就绪…", MsgLevel.BOTH, LogLevel.INFO))
             return
         }
         val char = gattClient?.getCharacteristic(serviceUuid,charUuid)?: return
@@ -107,8 +116,9 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
         viewModelScope.launch {
             val result = gattClient?.subscribe(char,cccd,enable) ?: GattResult.FAILURE
             _message.postValue(UiMessage(
-                "[订阅] $displayName → ${if (result.success) "成功" else "失败: ${result.msg}"}" ,
-                MsgLevel.BOTH
+                "[订阅] $displayName → ${if (result.success) "[成功]" else "[失败]: ${result.msg}"}" ,
+                MsgLevel.BOTH,
+                if (result.success) LogLevel.INFO else LogLevel.ERROR
             ))   // 结果消息
         }
     }
@@ -125,7 +135,11 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
                 retryMillis *= 2
                 if (retryMillis >= MAX_RETRY_MILLIS) {                  // 退避到上限：不再放弃，封顶 30s 持续低频重试
                     retryMillis = MAX_RETRY_MILLIS                       // 设备随时可能回来，永久低频尝试比永久放弃好
-                    _message.postValue(UiMessage("⏳ 设备仍不可达，每 30s 持续尝试…", MsgLevel.TOAST))
+                    _message.postValue(UiMessage(
+                        "⏳ 设备仍不可达，每 30s 持续尝试…",
+                        MsgLevel.LOG,
+                        LogLevel.WARN
+                    ))
                 }
                 delay(delayMs)               // 指数退避：1s→2s→4s→8s→16s
             }
@@ -135,12 +149,22 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun attemptConnect(){
         _connState.postValue(ConnState.CONNECTING)
+        _message.postValue(UiMessage(
+            "正在连接设备…",
+            MsgLevel.LOG,
+            LogLevel.INFO
+        ))
         curGatt?.disconnect()
         curGatt?.close()
         curGatt = null
         val newGatt = bleDevice?.connectGatt(application, false, gattCallback)
         if (newGatt == null) {
             // connectGatt 返回 null = 连接发起失败（空安全 ?. 会静默吞掉，必须显式检查！）
+            _message.postValue(UiMessage(
+                "⚠️ connectGatt 返回 null，本次重连发起失败",
+                MsgLevel.LOG,
+                LogLevel.ERROR
+            ))
             Log.w(TAG, "⚠️ connectGatt 返回 null，本次重连发起失败")
         } else {
             curGatt = newGatt
@@ -157,10 +181,20 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
             if (newState == BluetoothGatt.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS){
                 if (curGatt != null && gatt !== curGatt) { Log.w(TAG, "⚠️ 不是当前连接的连接回调，忽略"); return }
                 _connState.postValue(ConnState.CONNECTED)
+                _message.postValue(UiMessage(
+                    "✅ 连接成功，正在发现服务…",
+                    MsgLevel.LOG,
+                    LogLevel.INFO
+                ))
                 retryMillis = 1000
                 gatt?.discoverServices()
             }else if (newState == BluetoothGatt.STATE_DISCONNECTED){
                 if (gatt !== curGatt) { Log.w(TAG, "⚠️ 旧连接的断开回调，忽略"); return }
+                _message.postValue(UiMessage(
+                    "❌ 连接失败/断开，status=$status,准备重连…",
+                    MsgLevel.LOG,
+                    LogLevel.WARN
+                ))
                 Log.w(TAG, "❌ 连接失败/断开，status=$status")
                 _connState.postValue(ConnState.DISCONNECTED)
                 gatt?.close()
@@ -179,7 +213,8 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
 
                 _message.postValue(UiMessage(
                     "📡 服务发现完成，共 ${gatt?.services?.size ?: 0} 个服务",
-                    MsgLevel.LOG
+                    MsgLevel.LOG,
+                    LogLevel.INFO
                 ))
                 val serviceList = gatt?.services?.map { service ->
                     Log.i(TAG, "onServicesDiscovered: Service UUID = ${service.uuid}")
@@ -217,6 +252,11 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
 
                 _serviceData.postValue(serviceList)
             }else {
+                _message.postValue(UiMessage(
+                    "服务发现失败 status=$status",
+                    MsgLevel.LOG,
+                    LogLevel.ERROR
+                ))
                 Log.w(TAG, "服务发现失败 status=$status")
             }
 
@@ -298,7 +338,8 @@ class BleDeviceViewModel(application: Application): AndroidViewModel(application
                 // Step 2 第一版：推送全量进日志区（先看到问题，Q6 再优化）
                 _message.postValue(UiMessage(
                     "[NOTIFY] 心率测量值 → ${toHex(value)} ($hr bpm)",
-                    MsgLevel.LOG
+                    MsgLevel.LOG,
+                    LogLevel.INFO
                 ))
             }
         }
